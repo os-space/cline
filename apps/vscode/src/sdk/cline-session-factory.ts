@@ -122,10 +122,16 @@ function resolveWorkspaceName(workspacePath: string): string {
 
 type ReasoningEffort = NonNullable<CoreSessionConfig["reasoningEffort"]>
 type ProviderReasoningSettings = NonNullable<ProviderSettings["reasoning"]>
+type ProviderReasoningLevel = NonNullable<ProviderReasoningSettings["effort"]>
 type SessionReasoningConfig = Pick<CoreSessionConfig, "thinking" | "reasoningEffort">
+type ModeFieldMap = { plan: keyof ApiConfiguration; act: keyof ApiConfiguration }
 
 function isReasoningEffort(value: unknown): value is ReasoningEffort {
 	return value === "low" || value === "medium" || value === "high" || value === "xhigh"
+}
+
+function isProviderReasoningLevel(value: unknown): value is ProviderReasoningLevel {
+	return value === "none" || isReasoningEffort(value)
 }
 
 function hasStaleDisabledReasoningFields(reasoning: ProviderReasoningSettings | undefined): boolean {
@@ -179,6 +185,57 @@ function resolveProviderReasoningConfig(providerId: string): SessionReasoningCon
 		Logger.warn("[SessionFactory] Provider reasoning resolution failed:", error)
 		return {}
 	}
+}
+
+const PROVIDER_REASONING_EFFORT_FIELD_MAP: Partial<Record<string, ModeFieldMap>> = {
+	oca: { plan: "planModeOcaReasoningEffort", act: "actModeOcaReasoningEffort" },
+}
+
+function getModeFieldValue(config: ApiConfiguration, fields: ModeFieldMap, mode: Mode): unknown {
+	return config[mode === "plan" ? fields.plan : fields.act]
+}
+
+function normalizeLegacyReasoningLevel(value: unknown, source: string): ProviderReasoningLevel | undefined {
+	if (typeof value !== "string") {
+		return undefined
+	}
+
+	const normalized = value.trim().toLowerCase()
+	if (!normalized) {
+		return undefined
+	}
+
+	if (isProviderReasoningLevel(normalized)) {
+		return normalized
+	}
+
+	Logger.warn(`[SessionFactory] Ignoring unsupported ${source} reasoning effort: ${value}`)
+	return undefined
+}
+
+function resolveLegacyProviderReasoningConfig(
+	providerId: string,
+	mode: Mode,
+	apiConfig: ApiConfiguration | undefined,
+): SessionReasoningConfig {
+	if (!apiConfig) {
+		return {}
+	}
+
+	const providerFields = PROVIDER_REASONING_EFFORT_FIELD_MAP[providerId]
+	if (!providerFields) {
+		return {}
+	}
+
+	const effort = normalizeLegacyReasoningLevel(getModeFieldValue(apiConfig, providerFields, mode), `${providerId} legacy`)
+	if (!effort) {
+		return {}
+	}
+
+	return normalizeProviderReasoningSettings({
+		enabled: effort !== "none",
+		effort,
+	})
 }
 
 function positiveNumber(value: unknown): number | undefined {
@@ -617,7 +674,10 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		apiKey = resolveApiKey(providerId, apiConfig)
 	}
 	apiKey = apiKey ?? ""
-	const reasoningConfig = resolveProviderReasoningConfig(providerId)
+	const reasoningConfig = {
+		...resolveProviderReasoningConfig(providerId),
+		...resolveLegacyProviderReasoningConfig(providerId, mode, apiConfig),
+	}
 
 	// Build the system prompt using the shared prompt builder. Core still
 	// expects callers to provide a concrete systemPrompt, but the prompt builder
@@ -688,6 +748,7 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		...(modelId && positiveNumber(knownModels?.[modelId]?.maxTokens)
 			? { maxOutputTokens: positiveNumber(knownModels?.[modelId]?.maxTokens) }
 			: {}),
+		...reasoningConfig,
 		fetch,
 	}
 

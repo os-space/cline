@@ -449,6 +449,76 @@ describe("buildSessionConfig", () => {
 		expect((config.providerConfig as any).maxOutputTokens).toBe(4_096)
 	})
 
+	it("maps legacy per-mode OCA reasoning effort into the SDK session config", async () => {
+		mocks.stateManager.getApiConfiguration.mockReturnValue({
+			planModeApiProvider: "oca",
+			actModeApiProvider: "oca",
+			planModeOcaModelId: "oca-plan-model",
+			actModeOcaModelId: "oca-act-model",
+			ocaApiKey: "oca-key",
+			planModeOcaReasoningEffort: " HIGH ",
+			actModeOcaReasoningEffort: "low",
+		} as any)
+
+		const planConfig = await buildSessionConfig({ cwd: "/tmp/workspace", mode: "plan" })
+		const actConfig = await buildSessionConfig({ cwd: "/tmp/workspace", mode: "act" })
+
+		expect(planConfig.providerId).toBe("oca")
+		expect(planConfig.modelId).toBe("oca-plan-model")
+		expect(planConfig.thinking).toBe(true)
+		expect(planConfig.reasoningEffort).toBe("high")
+		expect(planConfig.providerConfig).toMatchObject({
+			providerId: "oca",
+			modelId: "oca-plan-model",
+			thinking: true,
+			reasoningEffort: "high",
+		})
+		expect(actConfig.providerId).toBe("oca")
+		expect(actConfig.modelId).toBe("oca-act-model")
+		expect(actConfig.thinking).toBe(true)
+		expect(actConfig.reasoningEffort).toBe("low")
+		expect(actConfig.providerConfig).toMatchObject({
+			providerId: "oca",
+			modelId: "oca-act-model",
+			thinking: true,
+			reasoningEffort: "low",
+		})
+	})
+
+	it("treats legacy OCA reasoning effort none as disabled reasoning", async () => {
+		mocks.stateManager.getApiConfiguration.mockReturnValue({
+			actModeApiProvider: "oca",
+			actModeOcaModelId: "oca-model",
+			ocaApiKey: "oca-key",
+			actModeOcaReasoningEffort: "none",
+		} as any)
+
+		const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
+
+		expect(config.thinking).toBe(false)
+		expect(config.reasoningEffort).toBeUndefined()
+		expect(config.providerConfig).toMatchObject({
+			thinking: false,
+		})
+		expect(config.providerConfig).not.toHaveProperty("reasoningEffort")
+	})
+
+	it("does not forward unsupported legacy OCA reasoning effort values", async () => {
+		mocks.stateManager.getApiConfiguration.mockReturnValue({
+			actModeApiProvider: "oca",
+			actModeOcaModelId: "oca-model",
+			ocaApiKey: "oca-key",
+			actModeOcaReasoningEffort: "minimal",
+		} as any)
+
+		const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
+
+		expect(config.thinking).toBeUndefined()
+		expect(config.reasoningEffort).toBeUndefined()
+		expect(config.providerConfig).not.toHaveProperty("thinking")
+		expect(config.providerConfig).not.toHaveProperty("reasoningEffort")
+	})
+
 	it("uses ClinePass model storage and omits empty nested apiKey so SDK OAuth can fill it", async () => {
 		mocks.stateManager.getApiConfiguration.mockReturnValue({
 			actModeApiProvider: "cline-pass",
